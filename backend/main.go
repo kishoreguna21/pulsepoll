@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -13,13 +14,10 @@ import (
 )
 
 func main() {
-
-	// Load environment variables
 	if err := godotenv.Load(); err != nil {
 		log.Println("Warning: .env file not found")
 	}
 
-	// Read environment variables
 	mongoURI := os.Getenv("MONGODB_URI")
 	redisURL := os.Getenv("REDIS_URL")
 
@@ -31,59 +29,36 @@ func main() {
 		log.Fatal("REDIS_URL is missing")
 	}
 
-	// -----------------------------
-	// MongoDB Connection
-	// -----------------------------
 	mongoClient, err := database.ConnectMongoDB(mongoURI)
 	if err != nil {
 		log.Fatal("MongoDB connection failed:", err)
 	}
 
-	// -----------------------------
-	// Redis Connection
-	// -----------------------------
 	redisClient, err := database.ConnectRedis(redisURL)
 	if err != nil {
 		log.Fatal("Redis connection failed:", err)
 	}
 
-	// -----------------------------
-	// Database Collections
-	// -----------------------------
 	db := mongoClient.Database("pulsepoll")
 
 	pollCollection := db.Collection("polls")
 	userCollection := db.Collection("users")
 
-	// -----------------------------
-	// Authentication Handler
-	// -----------------------------
 	authHandler := &handlers.AuthHandler{
 		Collection: userCollection,
 	}
 
-	// Authentication Middleware
 	authMiddleware := authHandler.AuthMiddleware()
 
-	// -----------------------------
-	// Poll Handler
-	// -----------------------------
 	pollHandler := &handlers.PollHandler{
 		Collection:     pollCollection,
 		UserCollection: userCollection,
 		Redis:          redisClient,
 	}
 
-	// -----------------------------
-	// Gin Router
-	// -----------------------------
 	router := gin.Default()
 
-	// -----------------------------
-	// CORS
-	// -----------------------------
 	router.Use(func(c *gin.Context) {
-
 		origin := c.Request.Header.Get("Origin")
 
 		allowedOrigins := map[string]bool{
@@ -93,11 +68,14 @@ func main() {
 			"http://127.0.0.1:5174": true,
 		}
 
+		frontendURL := strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
+
+		if frontendURL != "" {
+			allowedOrigins[frontendURL] = true
+		}
+
 		if allowedOrigins[origin] {
-			c.Writer.Header().Set(
-				"Access-Control-Allow-Origin",
-				origin,
-			)
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 		}
 
 		c.Writer.Header().Set(
@@ -120,7 +98,6 @@ func main() {
 			"Content-Type",
 		)
 
-		// Browser preflight
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
@@ -129,9 +106,6 @@ func main() {
 		c.Next()
 	})
 
-	// -----------------------------
-	// Health Check
-	// -----------------------------
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "PulsePoll Backend is running",
@@ -139,73 +113,35 @@ func main() {
 		})
 	})
 
-	// -----------------------------
-	// Authentication APIs
-	// -----------------------------
+	// Authentication
 	router.POST("/api/auth/register", authHandler.Register)
 	router.POST("/api/auth/login", authHandler.Login)
 
-	// -----------------------------
-	// PROTECTED POLL APIs
-	// Login required
-	// -----------------------------
+	// Protected poll routes
+	router.POST("/api/polls", authMiddleware, pollHandler.CreatePoll)
+	router.GET("/api/my-polls", authMiddleware, pollHandler.GetMyPolls)
+	router.DELETE("/api/polls/:id", authMiddleware, pollHandler.DeletePoll)
 
-	// Create poll
-	router.POST(
-		"/api/polls",
-		authMiddleware,
-		pollHandler.CreatePoll,
-	)
+	// Public poll routes
+	router.GET("/api/polls/:id", pollHandler.GetPoll)
+	router.POST("/api/polls/:id/vote", pollHandler.Vote)
+	router.GET("/api/polls/:id/stream", pollHandler.StreamPoll)
 
-	// Get logged-in user's polls
-	router.GET(
-		"/api/my-polls",
-		authMiddleware,
-		pollHandler.GetMyPolls,
-	)
-
-	// Delete poll
-	router.DELETE(
-		"/api/polls/:id",
-		authMiddleware,
-		pollHandler.DeletePoll,
-	)
-
-	// -----------------------------
-	// PUBLIC POLL APIs
-	// Login NOT required
-	// -----------------------------
-
-	// Get single poll
-	router.GET(
-		"/api/polls/:id",
-		pollHandler.GetPoll,
-	)
-
-	// Vote
-	router.POST(
-		"/api/polls/:id/vote",
-		pollHandler.Vote,
-	)
-
-	// REALTIME SSE STREAM
-	router.GET(
-		"/api/polls/:id/stream",
-		pollHandler.StreamPoll,
-	)
-
-	// -----------------------------
-	// Start Server
-	// -----------------------------
 	log.Println("================================")
 	log.Println("PulsePoll Backend Started")
 	log.Println("MongoDB: Connected")
 	log.Println("Redis: Connected")
-	log.Println("Server: http://localhost:8080")
-	log.Println("Frontend: http://localhost:5174")
+
+	port := os.Getenv("PORT")
+
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Println("Server: http://localhost:" + port)
 	log.Println("================================")
 
-	if err := router.Run(":8080"); err != nil {
+	if err := router.Run(":" + port); err != nil {
 		log.Fatal("Server failed:", err)
 	}
 }
