@@ -546,7 +546,7 @@ function PublicPollPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Vote failed");
 
-      setPoll(data);
+      setPoll(data.poll);
       setVoteMessage("Vote recorded successfully.");
     } catch (err) {
       setVoteMessage(err.message || "Unable to vote");
