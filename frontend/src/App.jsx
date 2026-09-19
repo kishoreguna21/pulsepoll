@@ -491,7 +491,7 @@ function PublicPollPage() {
     if (!id) return;
 
     const stream = new EventSource(`https://pulsepoll-ypsp.onrender.com/api/polls/${id}/stream`);
-    console.log("Creating EventSource for poll stream:", `http://localhost:8080/api/polls/${id}/stream`);
+   console.log("Creating EventSource for poll stream:", `${API_BASE}/api/polls/${id}/stream`);
 
     stream.onmessage = (event) => {
       try {
