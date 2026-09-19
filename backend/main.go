@@ -56,7 +56,17 @@ func main() {
 	userCollection := db.Collection("users")
 
 	// -----------------------------
-	// Handlers
+	// Authentication Handler
+	// -----------------------------
+	authHandler := &handlers.AuthHandler{
+		Collection: userCollection,
+	}
+
+	// Authentication Middleware
+	authMiddleware := authHandler.AuthMiddleware()
+
+	// -----------------------------
+	// Poll Handler
 	// -----------------------------
 	pollHandler := &handlers.PollHandler{
 		Collection:     pollCollection,
@@ -71,8 +81,6 @@ func main() {
 
 	// -----------------------------
 	// CORS
-	// IMPORTANT:
-	// Frontend is running on 5174
 	// -----------------------------
 	router.Use(func(c *gin.Context) {
 
@@ -103,16 +111,16 @@ func main() {
 		)
 
 		c.Writer.Header().Set(
-			"Access-Control-Expose-Headers",
-			"Content-Type",
-		)
-
-		c.Writer.Header().Set(
 			"Access-Control-Allow-Credentials",
 			"true",
 		)
 
-		// Handle browser preflight requests
+		c.Writer.Header().Set(
+			"Access-Control-Expose-Headers",
+			"Content-Type",
+		)
+
+		// Browser preflight
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
@@ -132,36 +140,59 @@ func main() {
 	})
 
 	// -----------------------------
-	// Authentication
+	// Authentication APIs
 	// -----------------------------
-	authHandler := &handlers.AuthHandler{
-		Collection: userCollection,
-	}
-
 	router.POST("/api/auth/register", authHandler.Register)
 	router.POST("/api/auth/login", authHandler.Login)
 
 	// -----------------------------
-	// Poll APIs
+	// PROTECTED POLL APIs
+	// Login required
 	// -----------------------------
 
 	// Create poll
-	router.POST("/api/polls", pollHandler.CreatePoll)
+	router.POST(
+		"/api/polls",
+		authMiddleware,
+		pollHandler.CreatePoll,
+	)
 
 	// Get logged-in user's polls
-	router.GET("/api/my-polls", pollHandler.GetMyPolls)
+	router.GET(
+		"/api/my-polls",
+		authMiddleware,
+		pollHandler.GetMyPolls,
+	)
 
 	// Delete poll
-	router.DELETE("/api/polls/:id", pollHandler.DeletePoll)
+	router.DELETE(
+		"/api/polls/:id",
+		authMiddleware,
+		pollHandler.DeletePoll,
+	)
+
+	// -----------------------------
+	// PUBLIC POLL APIs
+	// Login NOT required
+	// -----------------------------
 
 	// Get single poll
-	router.GET("/api/polls/:id", pollHandler.GetPoll)
+	router.GET(
+		"/api/polls/:id",
+		pollHandler.GetPoll,
+	)
 
 	// Vote
-	router.POST("/api/polls/:id/vote", pollHandler.Vote)
+	router.POST(
+		"/api/polls/:id/vote",
+		pollHandler.Vote,
+	)
 
 	// REALTIME SSE STREAM
-	router.GET("/api/polls/:id/stream", pollHandler.StreamPoll)
+	router.GET(
+		"/api/polls/:id/stream",
+		pollHandler.StreamPoll,
+	)
 
 	// -----------------------------
 	// Start Server

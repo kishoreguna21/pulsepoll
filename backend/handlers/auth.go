@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 
 	"pulsepoll/backend/models"
@@ -16,112 +19,205 @@ import (
 
 type AuthHandler struct {
 	Collection *mongo.Collection
-	JWTSecret  string
+}
+
+type authRequest struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type Claims struct {
-	UserID string `json:"userId"`
+	UserID string `json:"userID"`
 	Email  string `json:"email"`
 	jwt.RegisteredClaims
 }
 
-func NewAuthHandler(collection *mongo.Collection, jwtSecret string) *AuthHandler {
-	return &AuthHandler{Collection: collection, JWTSecret: jwtSecret}
+func getJWTSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+
+	if secret == "" {
+		secret = "pulsepoll-development-secret"
+	}
+
+	return []byte(secret)
+}
+
+func createToken(user models.User) (string, error) {
+	now := time.Now()
+
+	claims := Claims{
+		UserID: user.ID.Hex(),
+		Email:  user.Email,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(now),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	return token.SignedString(getJWTSecret())
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
-	var payload struct {
-		Name     string `json:"name"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
+	var req authRequest
 
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid registration payload"})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request",
+		})
 		return
 	}
 
-	payload.Name = strings.TrimSpace(payload.Name)
-	payload.Email = strings.TrimSpace(strings.ToLower(payload.Email))
-	if payload.Name == "" || payload.Email == "" || len(payload.Password) < 6 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Name, valid email, and password (min 6 chars) are required"})
+	req.Name = strings.TrimSpace(req.Name)
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+
+	if req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Name is required",
+		})
 		return
 	}
 
-	var existing models.User
-	if err := h.Collection.FindOne(c.Request.Context(), bson.M{"email": payload.Email}).Decode(&existing); err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
+	if req.Email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Email is required",
+		})
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(payload.Password), bcrypt.DefaultCost)
+	if len(req.Password) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Password must be at least 6 characters",
+		})
+		return
+	}
+
+	var existingUser models.User
+
+	err := h.Collection.FindOne(
+		c.Request.Context(),
+		bson.M{"email": req.Email},
+	).Decode(&existingUser)
+
+	if err == nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "Email already registered",
+		})
+		return
+	}
+
+	if err != mongo.ErrNoDocuments {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Database error",
+		})
+		return
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(req.Password),
+		bcrypt.DefaultCost,
+	)
+
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process password"})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Unable to secure password",
+		})
 		return
 	}
+
+	now := time.Now()
 
 	user := models.User{
-		Name:      payload.Name,
-		Email:     payload.Email,
-		Password:  string(hash),
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		Name:      req.Name,
+		Email:     req.Email,
+		Password:  string(passwordHash),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
-	result, err := h.Collection.InsertOne(c.Request.Context(), user)
+	result, err := h.Collection.InsertOne(
+		c.Request.Context(),
+		user,
+	)
+
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Unable to create account",
+		})
 		return
 	}
 
-	token, err := h.generateToken(result.InsertedID.(bson.ObjectID).Hex(), payload.Email)
+	user.ID = result.InsertedID.(bson.ObjectID)
+
+	token, err := createToken(user)
+
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session token"})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Unable to create login token",
+		})
 		return
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message": "User registered successfully",
+		"message": "Registration successful",
 		"token":   token,
 		"user": gin.H{
-			"id":    result.InsertedID.(bson.ObjectID).Hex(),
-			"name":  payload.Name,
-			"email": payload.Email,
+			"id":    user.ID.Hex(),
+			"name":  user.Name,
+			"email": user.Email,
 		},
 	})
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
-	var payload struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
+	var req loginRequest
 
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid login payload"})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request",
+		})
 		return
 	}
 
-	payload.Email = strings.TrimSpace(strings.ToLower(payload.Email))
-	if payload.Email == "" || len(payload.Password) < 6 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email and password are required"})
-		return
-	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	var user models.User
-	if err := h.Collection.FindOne(c.Request.Context(), bson.M{"email": payload.Email}).Decode(&user); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
-		return
-	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(payload.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
-		return
-	}
+	err := h.Collection.FindOne(
+		c.Request.Context(),
+		bson.M{"email": req.Email},
+	).Decode(&user)
 
-	token, err := h.generateToken(user.ID.Hex(), user.Email)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session token"})
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid email or password",
+		})
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword(
+		[]byte(user.Password),
+		[]byte(req.Password),
+	); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid email or password",
+		})
+		return
+	}
+
+	token, err := createToken(user)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Unable to create login token",
+		})
 		return
 	}
 
@@ -136,45 +232,75 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
-func (h *AuthHandler) generateToken(userID, email string) (string, error) {
-	claims := Claims{
-		UserID: userID,
-		Email:  email,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(h.JWTSecret))
-}
-
-func AuthRequired(jwtSecret string) gin.HandlerFunc {
+func (h *AuthHandler) AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authorization := c.GetHeader("Authorization")
-		if !strings.HasPrefix(authorization, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization token required"})
+		authHeader := c.GetHeader("Authorization")
+
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Authentication required",
+			})
+			c.Abort()
 			return
 		}
 
-		tokenString := strings.TrimPrefix(authorization, "Bearer ")
-		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-			return []byte(jwtSecret), nil
-		})
+		parts := strings.SplitN(authHeader, " ", 2)
+
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Invalid authorization header",
+			})
+			c.Abort()
+			return
+		}
+
+		tokenString := parts[1]
+
+		token, err := jwt.ParseWithClaims(
+			tokenString,
+			&Claims{},
+			func(token *jwt.Token) (interface{}, error) {
+				if token.Method != jwt.SigningMethodHS256 {
+					return nil, jwt.ErrTokenSignatureInvalid
+				}
+
+				return getJWTSecret(), nil
+			},
+		)
+
 		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization token"})
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Invalid or expired token",
+			})
+			c.Abort()
 			return
 		}
 
 		claims, ok := token.Claims.(*Claims)
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+
+		if !ok || claims.UserID == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Invalid token claims",
+			})
+			c.Abort()
 			return
 		}
 
 		c.Set("userID", claims.UserID)
-		c.Set("email", claims.Email)
+		c.Set("userEmail", claims.Email)
+
 		c.Next()
 	}
+}
+
+func EnsureUserIndex(collection *mongo.Collection) error {
+	_, err := collection.Indexes().CreateOne(
+		context.Background(),
+		mongo.IndexModel{
+			Keys:    bson.D{{Key: "email", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+	)
+
+	return err
 }
