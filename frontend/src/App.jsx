@@ -474,7 +474,7 @@ function PublicPollPage() {
       const response = await fetch(`${API_BASE}/api/polls/${id}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Poll not found");
-      setPoll(data.poll);
+      setPoll(data);
     } catch (err) {
       setError(err.message || "Unable to load poll");
       setPoll(null);
@@ -490,7 +490,7 @@ function PublicPollPage() {
   useEffect(() => {
     if (!id) return;
 
-    const stream = new EventSource(`http://localhost:8080/api/polls/${id}/stream`);
+    const stream = new EventSource(`https://pulsepoll-ypsp.onrender.com/api/polls/${id}/stream`);
     console.log("Creating EventSource for poll stream:", `http://localhost:8080/api/polls/${id}/stream`);
 
     stream.onmessage = (event) => {
@@ -546,7 +546,7 @@ function PublicPollPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Vote failed");
 
-      setPoll(data.poll);
+      setPoll(data);
       setVoteMessage("Vote recorded successfully.");
     } catch (err) {
       setVoteMessage(err.message || "Unable to vote");
