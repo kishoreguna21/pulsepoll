@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
-const API_BASE = "http://localhost:8080";
+const API_BASE = "https://pulsepoll-ypsp.onrender.com";
 const TOKEN_KEY = "pulsepoll_token";
 const USER_KEY = "pulsepoll_user";
 
@@ -12,6 +12,7 @@ const getStoredUser = () => {
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
+  
   }
 };
 
