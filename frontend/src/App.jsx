@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import "./App.css";
 import { Navigate, Route, Routes, Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 const API_BASE = "https://pulsepoll-ypsp.onrender.com";
