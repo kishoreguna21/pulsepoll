@@ -392,9 +392,10 @@ function CreatePollPage({ user, token, setFlash }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to create poll");
 
-      const shareUrl = data.shareUrl || `${window.location.origin}/poll/${data.id}`;
+      const pollId = data.poll?.id;
+      const shareUrl = data.shareUrl || `${window.location.origin}/poll/${pollId}`;
       setFlash(`Poll created successfully. Share link: ${shareUrl}`);
-      navigate(`/poll/${data.id}`);
+      navigate(`/poll/${pollId}`);
     } catch (err) {
       setError(err.message || "Unable to create poll");
     } finally {
