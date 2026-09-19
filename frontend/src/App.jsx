@@ -256,7 +256,7 @@ function DashboardPage({ user, token, onLogout, setFlash }) {
 
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to load polls");
-      setPolls(data.polls || []);
+      setPolls(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message || "Unable to load polls");
     } finally {
